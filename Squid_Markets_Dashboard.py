@@ -428,9 +428,26 @@ st.download_button(
     file_name="squid_quid_markets.csv", mime="text/csv",
 )
 
-# ═════════════════════════════ Footer ════════════════════════════════
+# =========================================================
+# METRIC GLOSSARY — RENDERED AT THE BOTTOM OF THE PAGE
+# =========================================================
+def render_metric_glossary():
+    st.subheader("📖 Metric Glossary")
+    st.markdown(
+        """
+        - **Total Volume:** Sum of the trading volume (USD) across all listed QUID markets.
+        - **Exchanges:** Number of unique exchanges listing QUID markets.
+        - **Unique Pairs:** Number of distinct trading pairs across all exchanges.
+        - **Top Exchange Share:** Share of total volume handled by the largest exchange.
+        - **Top-3 Exchanges Share:** Combined share of total volume handled by the three largest exchanges.
+        """
+    )
+
+
 st.markdown("---")
+
 render_metric_glossary()
+
 st.markdown(
     """
     <div style="margin-top: 20px; margin-bottom: 20px; font-size: 16px;">
