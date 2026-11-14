@@ -20,6 +20,7 @@ import streamlit as st
 API_URL = "https://defillama.com/api/public/markets/squid-3"
 LOGO_URL = "https://assets.coingecko.com/coins/images/102174404/standard/squid.jpg?1783587866"
 TOP_N = 15
+DEFAULT_BANDS = [0.001, 0.0025, 0.005, 0.0075, 0.01, 0.015, 0.02, 0.025, 0.05, 0.1, 0.25]
 
 st.set_page_config(
     page_title="Squid (QUID) Markets Dashboard",
@@ -47,6 +48,7 @@ st.markdown(
 )
 
 PALETTE = px.colors.qualitative.Set2
+GREEN, RED = "#54a24b", "#e45756"
 
 
 # ─────────────────────────────── Helpers ──────────────────────────────
@@ -65,61 +67,16 @@ def fetch(url: str):
     return r.json()
 
 
-def find_records(obj):
-    """Return the largest list of dicts found anywhere in the JSON."""
-    best = []
-
-    def walk(o):
-        nonlocal best
-        if isinstance(o, list):
-            if o and all(isinstance(x, dict) for x in o) and len(o) > len(best):
-                best = o
-            for x in o[:200]:
-                walk(x)
-        elif isinstance(o, dict):
-            for v in o.values():
-                walk(v)
-
-    walk(obj)
-    return best
+def nested(d, *keys):
+    for k in keys:
+        if not isinstance(d, dict):
+            return None
+        d = d.get(k)
+    return d
 
 
-def find_key(obj, key):
-    """Find the first scalar value stored under `key` anywhere in the JSON."""
-    if isinstance(obj, dict):
-        if key in obj and isinstance(obj[key], (str, int, float)):
-            return obj[key]
-        for v in obj.values():
-            r = find_key(v, key)
-            if r is not None:
-                return r
-    elif isinstance(obj, list):
-        for v in obj[:50]:
-            r = find_key(v, key)
-            if r is not None:
-                return r
-    return None
-
-
-def pick(cols, patterns, exclude=()):
-    """Pick the best matching column: exact / suffix match first, then substring."""
-    low = {c: c.lower() for c in cols}
-    for p in patterns:
-        for c, l in low.items():
-            if l == p or l.endswith("." + p):
-                return c
-    for p in patterns:
-        for c, l in low.items():
-            if p in l and not any(e in l for e in exclude):
-                return c
-    return None
-
-
-def to_num(s: pd.Series) -> pd.Series:
-    if pd.api.types.is_numeric_dtype(s):
-        return s.astype(float)
-    cleaned = s.astype(str).str.replace(r"[,$%\s]", "", regex=True)
-    return pd.to_numeric(cleaned, errors="coerce")
+def pct(x):
+    return x * 100 if isinstance(x, (int, float)) else None
 
 
 def fmt_usd(n, decimals=2):
@@ -132,6 +89,13 @@ def fmt_usd(n, decimals=2):
     return f"${n:,.{decimals}f}"
 
 
+def fmt_quote_price(p, quote):
+    if p is None or pd.isna(p):
+        return "—"
+    s = f"{p:,.2f}" if p >= 1 else f"{p:.8f}".rstrip("0")
+    return f"{s} {quote}"
+
+
 def top_n_with_others(s: pd.Series, n=10):
     s = s.sort_values(ascending=False)
     if len(s) <= n:
@@ -141,14 +105,58 @@ def top_n_with_others(s: pd.Series, n=10):
     return top
 
 
-def vwap(group: pd.DataFrame):
-    g = group.dropna(subset=["price"])
-    if len(g) == 0:
+def depth_at(arr, bands, band):
+    """USD depth at the chosen distance band (arrays align with `depth_bands`)."""
+    if not isinstance(arr, list) or not arr:
         return np.nan
-    w = g["volume"]
-    if w.sum() <= 0:
-        return g["price"].mean()
-    return np.average(g["price"], weights=w)
+    i = int(np.argmin([abs(b - band) for b in bands]))
+    if i >= len(arr) or arr[i] is None:
+        return np.nan
+    return float(arr[i])
+
+
+def parse_markets(data):
+    rows = []
+    for venue in ("cex", "dex"):
+        block = data.get(venue) or {}
+        if not isinstance(block, dict):
+            continue
+        for segment, items in block.items():
+            for m in items or []:
+                rows.append({
+                    "exchange": m.get("display_name") or m.get("slug") or "Unknown",
+                    "venue": (m.get("type") or venue).upper(),
+                    "segment": m.get("market_type") or segment,
+                    "pair": (m.get("symbol") or m.get("pair_id") or "N/A").upper(),
+                    "quote": (m.get("quote") or "").upper(),
+                    "price": m.get("price"),
+                    "best_bid": m.get("best_bid"),
+                    "best_ask": m.get("best_ask"),
+                    "price_chg": pct(m.get("price_change_24h")),
+                    "volume": m.get("volume_24h"),
+                    "volume_prev": m.get("volume_prev_24h"),
+                    "vol_chg": pct(m.get("volume_change_24h")),
+                    "vol_normalized": nested(m, "nvol", "normalized"),
+                    "vol_status": nested(m, "nvol", "status"),
+                    "maker_fee": pct(m.get("maker_fee")),
+                    "taker_fee": pct(m.get("taker_fee")),
+                    "depth_bid": m.get("depth_bid_usd"),
+                    "depth_ask": m.get("depth_ask_usd"),
+                    "pair_url": m.get("pair_url"),
+                })
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    num_cols = ["price", "best_bid", "best_ask", "price_chg", "volume", "volume_prev",
+                "vol_chg", "vol_normalized", "maker_fee", "taker_fee"]
+    for c in num_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["volume"] = df["volume"].fillna(0)
+    mid = (df["best_bid"] + df["best_ask"]) / 2
+    valid = (df["best_bid"] > 0) & (df["best_ask"] >= df["best_bid"])
+    df["spread_pct"] = np.where(valid, (df["best_ask"] - df["best_bid"]) / mid * 100, np.nan)
+    df["market"] = df["exchange"] + " · " + df["pair"]
+    return df
 
 
 # ─────────────────────────────── Load data ────────────────────────────
@@ -162,74 +170,30 @@ except Exception as e:
         st.stop()
     data = json.load(uploaded)
 
-records = find_records(data)
-if not records:
-    st.error("No list of records was found in the JSON response.")
-    st.json(data)
+f = parse_markets(data)
+if f.empty:
+    st.error("No markets were found in the API response.")
     st.stop()
 
-raw = pd.json_normalize(records, sep=".")
-for c in raw.columns:
-    if raw[c].map(lambda x: isinstance(x, (list, dict))).any():
-        raw[c] = raw[c].astype(str)
-
-cols = list(raw.columns)
-
-# ─────────────────────────── Column detection ─────────────────────────
-mapping = {
-    "exchange": pick(cols, ["exchange", "venue", "market_name", "source", "platform", "name"]),
-    "pair": pick(cols, ["pair", "market", "symbol", "ticker"], exclude=("exchange",)),
-    "price": pick(cols, ["price", "last", "price_usd", "converted_last.usd"]),
-    "volume": pick(cols, ["volume_usd", "usd_volume", "converted_volume.usd",
-                          "volume24h", "volume_24h", "volume", "vol"]),
-    "type": pick(cols, ["type", "category", "is_dex", "dex", "cex"]),
-    "updated": pick(cols, ["last_traded_at", "last_updated", "updated", "timestamp",
-                           "last_traded", "time", "date"]),
-}
-
-# ─────────────────────────── Build clean frame ────────────────────────
-df = pd.DataFrame(index=raw.index)
-df["exchange"] = raw[mapping["exchange"]].astype(str) if mapping["exchange"] else "Unknown"
-
-if mapping["pair"]:
-    df["pair"] = raw[mapping["pair"]].astype(str)
-elif {"base", "target"} <= set(c.lower() for c in cols):
-    b = next(c for c in cols if c.lower() == "base")
-    t = next(c for c in cols if c.lower() == "target")
-    df["pair"] = raw[b].astype(str) + "/" + raw[t].astype(str)
-else:
-    df["pair"] = "N/A"
-
-df["price"] = to_num(raw[mapping["price"]]) if mapping["price"] else np.nan
-df["volume"] = to_num(raw[mapping["volume"]]).fillna(0) if mapping["volume"] else 0.0
-
-if mapping["type"]:
-    df["type"] = raw[mapping["type"]].astype(str)
-
-if mapping["updated"]:
-    u = raw[mapping["updated"]]
-    num = pd.to_numeric(u, errors="coerce")
-    if num.notna().mean() > 0.8:
-        unit = "ms" if num.median() > 1e11 else "s"
-        df["updated"] = pd.to_datetime(num, unit=unit, utc=True, errors="coerce")
-    else:
-        df["updated"] = pd.to_datetime(u, utc=True, errors="coerce")
-
-has_price = df["price"].notna().any()
-f = df.copy()
+bands = data.get("depth_bands") or DEFAULT_BANDS
 
 # ─────────────────────────────── Aggregates ───────────────────────────
 total_vol = f["volume"].sum()
+total_prev = f["volume_prev"].sum(min_count=1)
 f["share"] = f["volume"] / total_vol * 100 if total_vol > 0 else 0.0
 
 ex_agg = (
     f.groupby("exchange")
-    .agg(volume=("volume", "sum"), markets=("pair", "count"), pairs=("pair", "nunique"))
+    .agg(
+        volume=("volume", "sum"),
+        volume_prev=("volume_prev", lambda s: s.sum(min_count=1)),
+        markets=("pair", "count"),
+        pairs=("pair", "nunique"),
+    )
     .reset_index()
 )
-ex_agg["vwap"] = (
-    ex_agg["exchange"].map({k: vwap(g) for k, g in f.groupby("exchange")})
-    if has_price else np.nan
+ex_agg["vol_chg"] = np.where(
+    ex_agg["volume_prev"] > 0, (ex_agg["volume"] / ex_agg["volume_prev"] - 1) * 100, np.nan
 )
 ex_agg["share"] = ex_agg["volume"] / total_vol * 100 if total_vol > 0 else 0.0
 ex_agg = ex_agg.sort_values("volume", ascending=False).reset_index(drop=True)
@@ -243,12 +207,17 @@ pair_agg = (
 )
 pair_agg["share"] = pair_agg["volume"] / total_vol * 100 if total_vol > 0 else 0.0
 
-if has_price:
-    mv = vwap(f)
-    f["dev_pct"] = (f["price"] / mv - 1) * 100 if mv else np.nan
+quote_agg = (
+    f[f["quote"] != ""].groupby("quote")["volume"].sum().reset_index()
+    .sort_values("volume", ascending=False)
+)
 
 top1 = ex_agg["share"].iloc[0] if len(ex_agg) else 0
 top3 = ex_agg["share"].head(3).sum()
+
+seg = nested(data, "segments", "spot") or next(iter((data.get("segments") or {}).values()), {}) or {}
+price_usd = seg.get("price")
+price_chg = pct(seg.get("price_change_24h"))
 
 # ─────────────────────────────── Header ───────────────────────────────
 logo_col, title_col = st.columns([1, 14], vertical_alignment="center")
@@ -257,7 +226,7 @@ with logo_col:
 with title_col:
     st.title("Squid (QUID) — Markets Analytics Dashboard")
 
-last_updated = find_key(data, "last_updated")
+last_updated = data.get("last_updated")
 if last_updated:
     try:
         last_updated = pd.to_datetime(last_updated).strftime("%Y-%m-%d")
@@ -271,17 +240,27 @@ st.markdown(
 )
 
 # ─────────────────────────────── KPIs ─────────────────────────────────
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("Total Volume", fmt_usd(total_vol))
-k2.metric("Exchanges", f"{f['exchange'].nunique():,}")
-k3.metric("Unique Pairs", f"{f['pair'].nunique():,}")
-k4.metric("Top Exchange Share", f"{top1:.1f}%", help=ex_agg["exchange"].iloc[0])
-k5.metric("Top-3 Exchanges Share", f"{top3:.1f}%")
+vol_delta = (
+    f"{(total_vol / total_prev - 1) * 100:+.2f}% vs prev. 24h"
+    if pd.notna(total_prev) and total_prev > 0 else None
+)
+
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1.metric(
+    "QUID Price (USD)",
+    f"${price_usd:,.4f}" if price_usd else "—",
+    f"{price_chg:+.2f}% (24h)" if price_chg is not None else None,
+)
+k2.metric("Total Volume (24h)", fmt_usd(total_vol), vol_delta)
+k3.metric("Exchanges", f"{f['exchange'].nunique():,}")
+k4.metric("Unique Pairs", f"{f['pair'].nunique():,}")
+k5.metric("Top Exchange Share", f"{top1:.1f}%", help=ex_agg["exchange"].iloc[0])
+k6.metric("Top-3 Exchanges Share", f"{top3:.1f}%")
 
 st.divider()
 
 # ════════════════════════════ Overview ═══════════════════════════════
-st.header("Overview")
+st.header("Market Overview")
 c1, c2 = st.columns([3, 2])
 
 with c1:
@@ -290,7 +269,7 @@ with c1:
         d, x="volume", y="exchange", orientation="h",
         text=d["volume"].map(fmt_usd), color="volume",
         color_continuous_scale="Viridis",
-        title=f"Top {min(TOP_N, len(ex_agg))} Exchanges by Volume",
+        title=f"Top {min(TOP_N, len(ex_agg))} Exchanges by 24h Volume",
     )
     fig.update_layout(coloraxis_showscale=False, yaxis_title=None,
                       xaxis_title="Volume (USD)", height=480)
@@ -301,7 +280,7 @@ with c2:
     s = top_n_with_others(ex_agg.set_index("exchange")["volume"], 10)
     fig = px.pie(
         names=s.index, values=s.values, hole=0.55,
-        color_discrete_sequence=PALETTE, title="Volume Share by Exchange",
+        color_discrete_sequence=PALETTE, title="24h Volume Share by Exchange",
     )
     fig.update_traces(textposition="inside", textinfo="percent+label")
     fig.update_layout(height=480, showlegend=False)
@@ -312,7 +291,7 @@ if not tm.empty:
     fig = px.treemap(
         tm, path=["exchange", "pair"], values="volume",
         color="volume", color_continuous_scale="Tealgrn",
-        title="Volume Treemap (Exchange → Pair)",
+        title="24h Volume Treemap (Exchange → Pair)",
     )
     fig.update_layout(height=450, coloraxis_showscale=False)
     st.plotly_chart(fig, use_container_width=True)
@@ -320,37 +299,76 @@ if not tm.empty:
 st.divider()
 
 # ════════════════════════════ Exchanges ══════════════════════════════
-st.header("Exchanges")
+st.header("Exchange Analysis")
 c1, c2 = st.columns(2)
 with c1:
     d = ex_agg.head(TOP_N)
     fig = px.bar(
         d, x="exchange", y="markets", color="pairs",
         color_continuous_scale="Blues",
-        title="Number of Markets per Exchange (color = unique pairs)",
+        title="Listed Markets per Exchange (color = unique pairs)",
     )
-    fig.update_layout(xaxis_title=None, height=420)
+    fig.update_layout(xaxis_title=None, yaxis_title="Markets", height=420)
     st.plotly_chart(fig, use_container_width=True)
 with c2:
     fig = px.scatter(
         ex_agg, x="markets", y="volume", size="volume", color="share",
         hover_name="exchange", color_continuous_scale="Turbo", size_max=55,
         log_y=bool((ex_agg["volume"] > 0).all()),
-        title="Liquidity Map — Markets vs Volume (bubble = volume)",
+        title="Liquidity Map — Markets vs 24h Volume (bubble = volume)",
     )
     fig.update_layout(height=420, yaxis_title="Volume (USD, log)")
     st.plotly_chart(fig, use_container_width=True)
 
+c3, c4 = st.columns(2)
+with c3:
+    d = ex_agg.melt(
+        id_vars="exchange", value_vars=["volume_prev", "volume"],
+        var_name="period", value_name="usd",
+    )
+    d["period"] = d["period"].map({"volume_prev": "Previous 24h", "volume": "Last 24h"})
+    fig = px.bar(
+        d, x="exchange", y="usd", color="period", barmode="group",
+        color_discrete_map={"Previous 24h": "#9ecae9", "Last 24h": "#4c78a8"},
+        title="Volume Momentum — Last 24h vs Previous 24h",
+    )
+    fig.update_layout(height=420, xaxis_title=None, yaxis_title="Volume (USD)",
+                      legend=dict(orientation="h", y=1.12, title=None))
+    st.plotly_chart(fig, use_container_width=True)
+with c4:
+    q = f[f["vol_normalized"].notna()].copy()
+    if not q.empty:
+        q = q.melt(
+            id_vars="market", value_vars=["volume", "vol_normalized"],
+            var_name="kind", value_name="usd",
+        )
+        q["kind"] = q["kind"].map({"volume": "Reported", "vol_normalized": "Normalized"})
+        fig = px.bar(
+            q, x="market", y="usd", color="kind", barmode="group",
+            color_discrete_map={"Reported": "#f58518", "Normalized": "#4c78a8"},
+            title="Volume Quality — Reported vs Normalized (24h)",
+        )
+        fig.update_layout(height=420, xaxis_title=None, yaxis_title="Volume (USD)",
+                          legend=dict(orientation="h", y=1.12, title=None))
+        st.plotly_chart(fig, use_container_width=True)
+st.caption(
+    "Normalized volume is the API's adjusted volume figure (`nvol`). Where it is lower than the "
+    "reported volume, reported volume may be high relative to the market's order-book liquidity."
+)
+
 st.subheader("Exchange Summary")
 st.dataframe(
     ex_agg.rename(columns={
-        "exchange": "Exchange", "volume": "Volume (USD)", "markets": "Markets",
-        "pairs": "Unique Pairs", "vwap": "VWAP Price", "share": "Share %",
-    }),
+        "exchange": "Exchange", "volume": "Volume 24h (USD)", "volume_prev": "Prev. 24h (USD)",
+        "vol_chg": "Volume Δ 24h %", "markets": "Markets", "pairs": "Unique Pairs",
+        "share": "Share %",
+    })[["Exchange", "Volume 24h (USD)", "Prev. 24h (USD)", "Volume Δ 24h %",
+        "Markets", "Unique Pairs", "Share %"]],
     use_container_width=True, hide_index=True,
     column_config={
-        "Volume (USD)": st.column_config.NumberColumn(format="$%,.0f"),
-        "VWAP Price": st.column_config.NumberColumn(format="$%.6f"),
+        "Volume 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
+        "Prev. 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
+        "Volume Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
         "Share %": st.column_config.ProgressColumn(format="%.2f%%", min_value=0, max_value=100),
     },
 )
@@ -358,28 +376,53 @@ st.dataframe(
 st.divider()
 
 # ═════════════════════════════ Pairs ═════════════════════════════════
-st.header("Pairs")
+st.header("Pair & Quote Currency Analysis")
 c1, c2 = st.columns(2)
 with c1:
     d = pair_agg.head(TOP_N).sort_values("volume")
     fig = px.bar(
         d, x="volume", y="pair", orientation="h", color="exchanges",
         color_continuous_scale="Sunset", text=d["volume"].map(fmt_usd),
-        title=f"Top {min(TOP_N, len(pair_agg))} Pairs by Volume (color = # exchanges)",
+        title=f"Top {min(TOP_N, len(pair_agg))} Pairs by 24h Volume (color = # exchanges)",
     )
     fig.update_traces(textposition="outside", cliponaxis=False)
-    fig.update_layout(yaxis_title=None, xaxis_title="Volume (USD)", height=520)
+    fig.update_layout(yaxis_title=None, xaxis_title="Volume (USD)", height=480)
     st.plotly_chart(fig, use_container_width=True)
 with c2:
     s = top_n_with_others(pair_agg.set_index("pair")["volume"], 10)
     fig = px.pie(
         names=s.index, values=s.values, hole=0.5,
         color_discrete_sequence=px.colors.qualitative.Pastel,
-        title="Volume Share by Pair",
+        title="24h Volume Share by Pair",
     )
     fig.update_traces(textinfo="percent+label")
-    fig.update_layout(height=520, showlegend=False)
+    fig.update_layout(height=480, showlegend=False)
     st.plotly_chart(fig, use_container_width=True)
+
+c3, c4 = st.columns(2)
+with c3:
+    if not quote_agg.empty and quote_agg["volume"].sum() > 0:
+        fig = px.pie(
+            quote_agg, names="quote", values="volume", hole=0.5,
+            color_discrete_sequence=PALETTE, title="24h Volume by Quote Currency",
+        )
+        fig.update_traces(textinfo="percent+label")
+        fig.update_layout(height=420, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+with c4:
+    pc = f[(f["volume"] > 0) & f["price_chg"].notna()].sort_values("price_chg")
+    if not pc.empty:
+        pc = pc.assign(direction=np.where(pc["price_chg"] >= 0, "Up", "Down"))
+        fig = px.bar(
+            pc, x="price_chg", y="market", orientation="h", color="direction",
+            color_discrete_map={"Up": GREEN, "Down": RED},
+            text=pc["price_chg"].map(lambda v: f"{v:+.2f}%"),
+            title="24h Price Change by Market (%)",
+        )
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        fig.update_layout(height=420, yaxis_title=None, xaxis_title="Change (%)", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+st.caption("Price changes are measured in each market's own quote currency (KRW, USDT, EUR, ...).")
 
 hm = f.pivot_table(index="pair", columns="exchange", values="volume", aggfunc="sum", fill_value=0)
 if not hm.empty:
@@ -390,37 +433,108 @@ if not hm.empty:
     fig = px.imshow(
         np.log10(hm.replace(0, np.nan)), aspect="auto", color_continuous_scale="Viridis",
         labels=dict(color="log10(Volume)"),
-        title="Heatmap — Pair × Exchange Volume (log10)",
+        title="Heatmap — Pair × Exchange 24h Volume (log10)",
     )
-    fig.update_layout(height=520)
+    fig.update_layout(height=450)
     st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Pair Summary")
 st.dataframe(
     pair_agg.rename(columns={
-        "pair": "Pair", "volume": "Volume (USD)", "exchanges": "Exchanges", "share": "Share %",
+        "pair": "Pair", "volume": "Volume 24h (USD)", "exchanges": "Exchanges", "share": "Share %",
     }),
     use_container_width=True, hide_index=True,
     column_config={
-        "Volume (USD)": st.column_config.NumberColumn(format="$%,.0f"),
+        "Volume 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
         "Share %": st.column_config.ProgressColumn(format="%.2f%%", min_value=0, max_value=100),
     },
 )
 
 st.divider()
 
+# ═══════════════════════ Liquidity & Depth ═══════════════════════════
+st.header("Liquidity & Order Book Depth")
+default_band = 0.02 if 0.02 in bands else bands[len(bands) // 2]
+band = st.select_slider(
+    "Depth band (distance from price)",
+    options=bands, value=default_band,
+    format_func=lambda b: f"±{b * 100:g}%",
+)
+f["bid_depth"] = f["depth_bid"].apply(lambda a: depth_at(a, bands, band))
+f["ask_depth"] = f["depth_ask"].apply(lambda a: depth_at(a, bands, band))
+
+c1, c2 = st.columns(2)
+with c1:
+    dd = f[(f["bid_depth"].fillna(0) > 0) | (f["ask_depth"].fillna(0) > 0)].copy()
+    if not dd.empty:
+        dd["total"] = dd["bid_depth"].fillna(0) + dd["ask_depth"].fillna(0)
+        order = dd.sort_values("total")["market"].tolist()
+        m = dd.melt(id_vars="market", value_vars=["bid_depth", "ask_depth"],
+                    var_name="side", value_name="usd")
+        m["side"] = m["side"].map({"bid_depth": "Bids", "ask_depth": "Asks"})
+        m["usd"] = m["usd"].fillna(0)
+        fig = px.bar(
+            m, x="usd", y="market", color="side", barmode="group", orientation="h",
+            color_discrete_map={"Bids": GREEN, "Asks": RED},
+            category_orders={"market": order},
+            title=f"Order Book Depth within ±{band * 100:g}% (USD)",
+        )
+        fig.update_layout(height=480, yaxis_title=None, xaxis_title="Depth (USD)",
+                          legend=dict(orientation="h", y=1.1, title=None))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No order-book depth is available for the selected band.")
+with c2:
+    sp = f[f["spread_pct"].notna()].sort_values("spread_pct", ascending=False)
+    if not sp.empty:
+        fig = px.bar(
+            sp.sort_values("spread_pct"), x="spread_pct", y="market", orientation="h",
+            color="exchange", color_discrete_sequence=PALETTE, log_x=True,
+            text=sp.sort_values("spread_pct")["spread_pct"].map(lambda v: f"{v:.2f}%"),
+            title="Bid-Ask Spread by Market (%, log scale)",
+        )
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        fig.update_layout(height=480, yaxis_title=None, xaxis_title="Spread (%)", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+st.caption(
+    "Depth = USD value of resting bids/asks within the selected distance from the market price. "
+    "Markets with no 24h volume and very wide spreads are effectively inactive."
+)
+
+st.divider()
+
 # ═══════════════════════════ All Markets ═════════════════════════════
 st.header("All Markets")
-show = f.sort_values("volume", ascending=False)
-if not has_price:
-    show = show.drop(columns=["price", "dev_pct"], errors="ignore")
+bl = f"±{band * 100:g}%"
+show = f.sort_values("volume", ascending=False).copy()
+show["Price (quote)"] = show.apply(lambda r: fmt_quote_price(r["price"], r["quote"]), axis=1)
+show["vol_status"] = show["vol_status"].fillna("no volume")
+show = show.rename(columns={
+    "exchange": "Exchange", "pair": "Pair", "venue": "Type", "price_chg": "Price Δ 24h %",
+    "volume": "Volume 24h (USD)", "vol_chg": "Volume Δ 24h %", "share": "Share %",
+    "vol_normalized": "Normalized Volume (USD)", "vol_status": "Volume Status",
+    "spread_pct": "Spread %", "bid_depth": f"Bid Depth {bl} (USD)",
+    "ask_depth": f"Ask Depth {bl} (USD)", "maker_fee": "Maker Fee %",
+    "taker_fee": "Taker Fee %", "pair_url": "Trade",
+})[[
+    "Exchange", "Pair", "Type", "Price (quote)", "Price Δ 24h %", "Volume 24h (USD)",
+    "Volume Δ 24h %", "Share %", "Normalized Volume (USD)", "Volume Status", "Spread %",
+    f"Bid Depth {bl} (USD)", f"Ask Depth {bl} (USD)", "Maker Fee %", "Taker Fee %", "Trade",
+]]
 st.dataframe(
     show, use_container_width=True, hide_index=True,
     column_config={
-        "volume": st.column_config.NumberColumn("Volume (USD)", format="$%,.0f"),
-        "price": st.column_config.NumberColumn("Price", format="$%.6f"),
-        "share": st.column_config.ProgressColumn("Share %", format="%.2f%%", min_value=0, max_value=100),
-        "dev_pct": st.column_config.NumberColumn("Dev. vs VWAP %", format="%.2f%%"),
+        "Price Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
+        "Volume 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
+        "Volume Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
+        "Share %": st.column_config.ProgressColumn(format="%.2f%%", min_value=0, max_value=100),
+        "Normalized Volume (USD)": st.column_config.NumberColumn(format="$%.0f"),
+        "Spread %": st.column_config.NumberColumn(format="%.2f%%"),
+        f"Bid Depth {bl} (USD)": st.column_config.NumberColumn(format="$%.0f"),
+        f"Ask Depth {bl} (USD)": st.column_config.NumberColumn(format="$%.0f"),
+        "Maker Fee %": st.column_config.NumberColumn(format="%.2f%%"),
+        "Taker Fee %": st.column_config.NumberColumn(format="%.2f%%"),
+        "Trade": st.column_config.LinkColumn("Trade", display_text="Open ↗"),
     },
 )
 st.download_button(
@@ -435,11 +549,16 @@ def render_metric_glossary():
     st.subheader("📖 Metric Glossary")
     st.markdown(
         """
-        - **Total Volume:** Sum of the trading volume (USD) across all listed QUID markets.
+        - **QUID Price (USD):** Aggregate spot price reported by the API, with its 24h change.
+        - **Total Volume (24h):** Sum of the reported 24h trading volume (USD) across all QUID markets, compared with the previous 24h.
         - **Exchanges:** Number of unique exchanges listing QUID markets.
         - **Unique Pairs:** Number of distinct trading pairs across all exchanges.
         - **Top Exchange Share:** Share of total volume handled by the largest exchange.
         - **Top-3 Exchanges Share:** Combined share of total volume handled by the three largest exchanges.
+        - **Normalized Volume:** The API's adjusted volume figure; a large gap versus reported volume can indicate volume that is high relative to order-book liquidity.
+        - **Bid-Ask Spread %:** (Best ask − best bid) ÷ mid price. Wider spreads mean higher trading cost and thinner liquidity.
+        - **Order Book Depth:** USD value of resting bids and asks within a chosen distance (±%) of the market price.
+        - **Price (quote):** Last price in the market's quote currency (KRW, USDT, EUR, ...), not converted to USD.
         """
     )
 
