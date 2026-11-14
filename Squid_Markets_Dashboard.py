@@ -429,7 +429,35 @@ st.download_button(
 )
 
 # ═════════════════════════════ Footer ════════════════════════════════
-st.divider()
-st.markdown("Built by: [Eman Raz](https://x.com/0xeman_raz)")
-st.markdown("🎁 Support / Tips:")
-st.code("0x621bd661e3d57da1c8237209824827f1027abf62", language=None)
+st.markdown("---")
+render_metric_glossary()
+st.markdown(
+    """
+    <div style="margin-top: 20px; margin-bottom: 20px; font-size: 16px;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <img src="https://pbs.twimg.com/profile_images/2060406047391559681/sA9zPNKM_400x400.jpg" style="width:25px; height:25px; border-radius: 50%;">
+            <span>Built by: <a href="https://x.com/0xeman_raz" target="_blank">Eman Raz</a></span>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+st.markdown("")
+st.markdown(
+    """
+    <!-- Support / Tips Box -->
+    <div style="
+        background-color: #F5F5F5;
+        border-left: 5px solid #888;
+        padding: 12px;
+        border-radius: 10px;
+        margin-top: 10px;
+        font-size: 15px;
+        color: #333;
+    ">
+        🎁 <b>Support / Tips:</b><br>
+        <code>0x621bd661e3d57da1c8237209824827f1027abf62</code>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
