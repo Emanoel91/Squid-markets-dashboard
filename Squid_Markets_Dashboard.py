@@ -265,6 +265,11 @@ if last_updated:
         last_updated = str(last_updated)[:10]
     st.caption(f"last_updated: {last_updated}")
 
+st.markdown(
+    "[🌐 Squid Website](https://www.squidrouter.com/) &nbsp;&nbsp;|&nbsp;&nbsp; "
+    "[🐦 Squid X Account](https://x.com/squidrouter)"
+)
+
 # ─────────────────────────────── KPIs ─────────────────────────────────
 k1, k2, k3, k4, k5 = st.columns(5)
 k1.metric("Total Volume", fmt_usd(total_vol))
@@ -422,3 +427,9 @@ st.download_button(
     "⬇️ Download markets (CSV)", show.to_csv(index=False).encode("utf-8"),
     file_name="squid_quid_markets.csv", mime="text/csv",
 )
+
+# ═════════════════════════════ Footer ════════════════════════════════
+st.divider()
+st.markdown("Built by: [Eman Raz](https://x.com/0xeman_raz)")
+st.markdown("🎁 Support / Tips:")
+st.code("0x621bd661e3d57da1c8237209824827f1027abf62", language=None)
