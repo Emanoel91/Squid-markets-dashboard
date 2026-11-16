@@ -8,6 +8,8 @@ Run:
 """
 
 import json
+import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -21,6 +23,14 @@ API_URL = "https://defillama.com/api/public/markets/squid-3"
 LOGO_URL = "https://assets.coingecko.com/coins/images/102174404/standard/squid.jpg?1783587866"
 TOP_N = 15
 DEFAULT_BANDS = [0.001, 0.0025, 0.005, 0.0075, 0.01, 0.015, 0.02, 0.025, 0.05, 0.1, 0.25]
+
+# Daily history (written by collect_daily_snapshot.py at the end of each UTC day).
+# - Local file:   data/squid_daily_history.csv
+# - Or a raw URL: set env var SQUID_HISTORY_URL, e.g.
+#   https://raw.githubusercontent.com/<user>/<repo>/main/data/squid_daily_history.csv
+HISTORY_PATH = Path("data/squid_daily_history.csv")
+HISTORY_URL = os.environ.get("SQUID_HISTORY_URL", "")
+TOP_PAIRS_HISTORY = 6
 
 st.set_page_config(
     page_title="Squid (QUID) Markets Dashboard",
@@ -159,6 +169,50 @@ def parse_markets(data):
     return df
 
 
+# ─────────────────────────── Daily history ────────────────────────────
+@st.cache_data(ttl=600, show_spinner=False)
+def load_history(url: str, path: str) -> pd.DataFrame:
+    cols = ["date", "exchange", "pair", "volume", "volume_prev"]
+    try:
+        if url:
+            h = pd.read_csv(url)
+        elif Path(path).exists():
+            h = pd.read_csv(path)
+        else:
+            return pd.DataFrame(columns=cols)
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    for c in cols:
+        if c not in h.columns:
+            h[c] = np.nan
+    h["date"] = pd.to_datetime(h["date"], errors="coerce").dt.normalize()
+    for c in ("volume", "volume_prev"):
+        h[c] = pd.to_numeric(h[c], errors="coerce")
+    return h.dropna(subset=["date"])[cols]
+
+
+def stacked_over_time(d, key, title, normalized=False, order=None):
+    """Daily stacked bar chart (absolute or 100% normalized)."""
+    g = d.groupby(["day", key], as_index=False)["volume"].sum()
+    orders = {"day": sorted(g["day"].unique())}
+    if order:
+        orders[key] = order
+    fig = px.bar(
+        g, x="day", y="volume", color=key, title=title,
+        color_discrete_sequence=PALETTE, category_orders=orders,
+    )
+    fig.update_layout(
+        barmode="stack", height=430, xaxis_title=None, xaxis_type="category",
+        legend=dict(orientation="h", y=-0.2, title=None),
+    )
+    if normalized:
+        fig.update_layout(barnorm="percent", yaxis_title="Share of daily volume (%)",
+                          yaxis_ticksuffix="%")
+    else:
+        fig.update_layout(yaxis_title="Volume (USD)")
+    return fig
+
+
 # ─────────────────────────────── Load data ────────────────────────────
 try:
     data = fetch(API_URL)
@@ -214,6 +268,21 @@ quote_agg = (
 
 top1 = ex_agg["share"].iloc[0] if len(ex_agg) else 0
 top3 = ex_agg["share"].head(3).sum()
+
+# ── Daily history: recorded snapshots + today's live snapshot (until it is recorded)
+hist = load_history(HISTORY_URL, str(HISTORY_PATH))
+today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
+live = f[["exchange", "pair", "volume", "volume_prev"]].assign(date=today)
+today_recorded = (not hist.empty) and bool((hist["date"] == today).any())
+if today_recorded:
+    hist_all = hist.copy()
+elif hist.empty:
+    hist_all = live.copy()
+else:
+    hist_all = pd.concat([hist, live], ignore_index=True)
+hist_all["date"] = pd.to_datetime(hist_all["date"])
+hist_all["day"] = hist_all["date"].dt.strftime("%Y-%m-%d")
+n_recorded_days = hist["date"].nunique() if not hist.empty else 0
 
 seg = nested(data, "segments", "spot") or next(iter((data.get("segments") or {}).values()), {}) or {}
 price_usd = seg.get("price")
@@ -286,12 +355,35 @@ with c2:
     fig.update_layout(height=480, showlegend=False)
     st.plotly_chart(fig, use_container_width=True)
 
+c1, c2 = st.columns(2)
+ex_order = ex_agg["exchange"].tolist()
+with c1:
+    st.plotly_chart(
+        stacked_over_time(hist_all, "exchange", "Trading Volume by Exchange Over Time",
+                          normalized=False, order=ex_order),
+        use_container_width=True,
+    )
+with c2:
+    st.plotly_chart(
+        stacked_over_time(hist_all, "exchange", "Normalized Trading Volume by Exchange Over Time",
+                          normalized=True, order=ex_order),
+        use_container_width=True,
+    )
+st.caption(
+    f"Daily history: {n_recorded_days} recorded day(s). Each day's 24h volume is recorded at the end of "
+    "the day by `collect_daily_snapshot.py`; until then the latest bar shows today's live 24h snapshot."
+)
+
 tm = f[f["volume"] > 0]
 if not tm.empty:
     fig = px.treemap(
         tm, path=["exchange", "pair"], values="volume",
         color="volume", color_continuous_scale="Tealgrn",
         title="24h Volume Treemap (Exchange → Pair)",
+    )
+    fig.update_traces(
+        texttemplate="<b>%{label}</b><br>%{value:$,.0f}",
+        textposition="middle center",
     )
     fig.update_layout(height=450, coloraxis_showscale=False)
     st.plotly_chart(fig, use_container_width=True)
@@ -356,6 +448,42 @@ st.caption(
     "reported volume, reported volume may be high relative to the market's order-book liquidity."
 )
 
+c5, c6 = st.columns(2)
+with c5:
+    vc = ex_agg[ex_agg["vol_chg"].notna()].sort_values("vol_chg", ascending=False).copy()
+    if not vc.empty:
+        vc["direction"] = np.where(vc["vol_chg"] >= 0, "Increase", "Decrease")
+        fig = px.bar(
+            vc, x="exchange", y="vol_chg", color="direction",
+            color_discrete_map={"Increase": GREEN, "Decrease": RED},
+            text=vc["vol_chg"].map(lambda v: f"{v:+.1f}%"),
+            title="Volume Change by Exchange (24h)",
+        )
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        fig.update_layout(height=420, xaxis_title=None, yaxis_title="Change vs previous 24h (%)",
+                          showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+with c6:
+    chg = (
+        hist_all.groupby(["day", "exchange"])
+        .agg(volume=("volume", "sum"), prev=("volume_prev", lambda s: s.sum(min_count=1)))
+        .reset_index()
+    )
+    chg["vol_chg"] = np.where(chg["prev"] > 0, (chg["volume"] / chg["prev"] - 1) * 100, np.nan)
+    chg = chg.dropna(subset=["vol_chg"])
+    if not chg.empty:
+        fig = px.line(
+            chg, x="day", y="vol_chg", color="exchange", markers=True,
+            color_discrete_sequence=PALETTE,
+            category_orders={"day": sorted(chg["day"].unique()), "exchange": ex_order},
+            title="Volume Change by Exchange over Time",
+        )
+        fig.add_hline(y=0, line_dash="dash", line_color="gray")
+        fig.update_layout(height=420, xaxis_title=None, xaxis_type="category",
+                          yaxis_title="Change vs previous 24h (%)",
+                          legend=dict(orientation="h", y=-0.2, title=None))
+        st.plotly_chart(fig, use_container_width=True)
+
 st.subheader("Exchange Summary")
 st.dataframe(
     ex_agg.rename(columns={
@@ -398,6 +526,28 @@ with c2:
     fig.update_traces(textinfo="percent+label")
     fig.update_layout(height=480, showlegend=False)
     st.plotly_chart(fig, use_container_width=True)
+
+# Top pairs over time (top N by total volume in the history window, rest grouped as "Others")
+pairs_hist = hist_all.copy()
+top_pairs = (
+    pairs_hist.groupby("pair")["volume"].sum().nlargest(TOP_PAIRS_HISTORY).index.tolist()
+)
+pairs_hist["pair_grp"] = np.where(pairs_hist["pair"].isin(top_pairs), pairs_hist["pair"], "Others")
+pair_order = top_pairs + (["Others"] if (pairs_hist["pair_grp"] == "Others").any() else [])
+
+cp1, cp2 = st.columns(2)
+with cp1:
+    st.plotly_chart(
+        stacked_over_time(pairs_hist, "pair_grp", "Volume by Pair Over Time",
+                          normalized=False, order=pair_order),
+        use_container_width=True,
+    )
+with cp2:
+    st.plotly_chart(
+        stacked_over_time(pairs_hist, "pair_grp", "Normalized Volume by Pair Over Time",
+                          normalized=True, order=pair_order),
+        use_container_width=True,
+    )
 
 c3, c4 = st.columns(2)
 with c3:
@@ -555,6 +705,9 @@ def render_metric_glossary():
         - **Unique Pairs:** Number of distinct trading pairs across all exchanges.
         - **Top Exchange Share:** Share of total volume handled by the largest exchange.
         - **Top-3 Exchanges Share:** Combined share of total volume handled by the three largest exchanges.
+        - **Over Time charts:** Built from daily snapshots of each market's 24h volume, recorded at the end of every UTC day.
+        - **Normalized (stacked) charts:** 100% stacked bars showing each exchange's or pair's share of the day's total volume.
+        - **Volume Change (24h):** Last 24h volume compared with the previous 24h, per exchange.
         - **Normalized Volume:** The API's adjusted volume figure; a large gap versus reported volume can indicate volume that is high relative to order-book liquidity.
         - **Bid-Ask Spread %:** (Best ask − best bid) ÷ mid price. Wider spreads mean higher trading cost and thinner liquidity.
         - **Order Book Depth:** USD value of resting bids and asks within a chosen distance (±%) of the market price.
