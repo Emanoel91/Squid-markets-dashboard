@@ -1,16 +1,6 @@
-"""
-Squid (QUID) Markets Dashboard
-Data source: https://defillama.com/api/public/markets/squid-3
-
-Run:
-    pip install streamlit pandas numpy requests plotly
-    streamlit run squid_markets_dashboard.py
-"""
-
 import json
 import os
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
