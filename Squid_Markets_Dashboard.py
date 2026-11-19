@@ -285,7 +285,7 @@ with logo_col:
 with title_col:
     st.title("Squid (QUID) — Markets Analytics Dashboard")
 
-last_updated = data.get("last updated")
+last_updated = data.get("last_updated")
 if last_updated:
     try:
         last_updated = pd.to_datetime(last_updated).strftime("%Y-%m-%d")
