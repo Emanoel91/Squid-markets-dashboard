@@ -34,18 +34,45 @@ st.markdown(
     <style>
     [data-testid="stSidebar"], [data-testid="collapsedControl"],
     [data-testid="stSidebarCollapsedControl"] {display: none;}
-    .block-container {padding-top: 2rem;}
+    .block-container {padding-top: 3.5rem;}
     div[data-testid="stMetric"] {
         background: rgba(128,128,128,0.08);
         border: 1px solid rgba(128,128,128,0.25);
         border-radius: 12px;
         padding: 14px 18px;
+        height: 130px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
     }
     div[data-testid="stMetricLabel"] p {font-size: 0.85rem; opacity: 0.75;}
+    div[data-testid="stMetricValue"],
+    div[data-testid="stMetricValue"] * {font-weight: 700 !important;}
+    .app-header {display: flex; align-items: center; gap: 16px; margin-bottom: 0.5rem;}
+    .app-header img {width: 64px; height: 64px; object-fit: contain; border-radius: 12px; flex-shrink: 0;}
+    .app-header h1 {margin: 0; padding: 0; line-height: 1.25;}
+    .link-row a {text-decoration: none;}
+    .link-row img {height: 18px; width: 18px; vertical-align: middle; margin-right: 6px;}
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+# Larger chart titles on every Plotly chart rendered by the app.
+CHART_TITLE_SIZE = 20
+_plotly_chart = st.plotly_chart
+
+
+def _plotly_chart_big_title(fig, *args, **kwargs):
+    fig.update_layout(title_font=dict(size=CHART_TITLE_SIZE))
+    return _plotly_chart(fig, *args, **kwargs)
+
+
+st.plotly_chart = _plotly_chart_big_title
+
+WEBSITE_ICON = "data:image/png;base64,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"
+X_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAAAAABXZoBIAAAAqUlEQVR4AdXQEQwCUQDG8b87pFkcRmGuyfFpFB+HuZ20/DA4yndLHj17dHJ08G/V1qp7vvWjT77t28cfKlIIMS54KmPa8uli35l4WGvNtyQ7G2CmF37M7WncQe+NidKW5CyYyDhboY5kRZelLshz5OyevK0dySVZNz1iT07r0LkpbJmqdcUoJyt+VVrAxkB0NRnzKhysGQfevt++mgavfOpi844hhFjyf+4xHWjgrPr73gAAAABJRU5ErkJggg=="
 
 PALETTE = px.colors.qualitative.Set2
 GREEN, RED = "#54a24b", "#e45756"
@@ -343,11 +370,15 @@ price_usd = seg.get("price")
 price_chg = pct(seg.get("price_change_24h"))
 
 # ─────────────────────────────── Header ───────────────────────────────
-logo_col, title_col = st.columns([1, 14], vertical_alignment="center")
-with logo_col:
-    st.image(LOGO_URL, width=64)
-with title_col:
-    st.title("Squid (QUID) — Markets Analytics Dashboard")
+st.markdown(
+    f"""
+    <div class="app-header">
+        <img src="{LOGO_URL}" alt="Squid logo">
+        <h1>Squid (QUID) — Markets Analytics Dashboard</h1>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 last_updated = data.get("last_updated")
 if last_updated:
@@ -358,8 +389,14 @@ if last_updated:
     st.caption(f"last_updated: {last_updated}")
 
 st.markdown(
-    "[🌐 Squid Website](https://www.squidrouter.com/) &nbsp;&nbsp;|&nbsp;&nbsp; "
-    "[🐦 Squid X Account](https://x.com/squidrouter)"
+    f"""
+    <div class="link-row">
+        <a href="https://www.squidrouter.com/" target="_blank"><img src="{WEBSITE_ICON}" alt="">Squid Website</a>
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        <a href="https://x.com/squidrouter" target="_blank"><img src="{X_ICON}" alt="">Squid X Account</a>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 # ─────────────────────────────── KPIs ─────────────────────────────────
