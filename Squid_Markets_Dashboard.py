@@ -50,6 +50,70 @@ st.markdown(
 PALETTE = px.colors.qualitative.Set2
 GREEN, RED = "#54a24b", "#e45756"
 
+# ─────────────────────────── Exchange logos ───────────────────────────
+# Keys are lowercase exchange names. Matching is case-insensitive and also accepts
+# names that contain the key (e.g. "Bitget Futures" -> "bitget").
+EXCHANGE_LOGOS = {
+    "upbit": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/351.png",
+    "bithumb": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/200.png",
+    "mexc": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/544.png",
+    "bitget": "https://s2.coinmarketcap.com/static/img/coins/64x64/11092.png",
+    "kraken": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/24.png",
+    "bitvavo": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/520.png",
+}
+
+
+def logo_for(name):
+    """Return the logo URL for an exchange name, or None if unknown."""
+    if not isinstance(name, str):
+        return None
+    n = name.strip().lower()
+    if n in EXCHANGE_LOGOS:
+        return EXCHANGE_LOGOS[n]
+    for key, url in EXCHANGE_LOGOS.items():
+        if key in n:
+            return url
+    return None
+
+
+def logos_on_hbar(fig, categories, size=0.05, left_margin=150):
+    """Horizontal bar chart: logo + name to the left of each bar.
+    `categories` must be in bottom-to-top order (same as the y axis)."""
+    fig.update_yaxes(categoryorder="array", categoryarray=list(categories), showticklabels=False)
+    for i, name in enumerate(categories):
+        url = logo_for(name)
+        if url:
+            fig.add_layout_image(
+                source=url, xref="paper", yref="y", x=0, y=i,
+                sizex=size, sizey=0.8, xanchor="right", yanchor="middle",
+                sizing="contain", layer="above",
+            )
+        fig.add_annotation(
+            x=0, y=i, xref="paper", yref="y", text=str(name), showarrow=False,
+            xanchor="right", yanchor="middle", xshift=-(34 if url else 6),
+        )
+    fig.update_layout(margin=dict(l=left_margin))
+    return fig
+
+
+def logos_on_vbar(fig, categories, size=0.1, bottom_margin=120):
+    """Vertical bar chart: logo + name below each bar (left-to-right order)."""
+    fig.update_xaxes(categoryorder="array", categoryarray=list(categories), showticklabels=False)
+    for i, name in enumerate(categories):
+        url = logo_for(name)
+        if url:
+            fig.add_layout_image(
+                source=url, xref="x", yref="paper", x=i, y=0,
+                sizex=0.8, sizey=size, xanchor="center", yanchor="top",
+                sizing="contain", layer="above",
+            )
+        fig.add_annotation(
+            x=i, y=0, xref="x", yref="paper", text=str(name), showarrow=False,
+            xanchor="center", yanchor="top", yshift=-(34 if url else 6),
+        )
+    fig.update_layout(margin=dict(b=bottom_margin))
+    return fig
+
 
 # ─────────────────────────────── Helpers ──────────────────────────────
 @st.cache_data(ttl=600, show_spinner="Fetching data from DefiLlama...")
@@ -333,6 +397,7 @@ with c1:
     fig.update_layout(coloraxis_showscale=False, yaxis_title=None,
                       xaxis_title="Volume (USD)", height=480)
     fig.update_traces(textposition="outside", cliponaxis=False)
+    logos_on_hbar(fig, d["exchange"].tolist())
     st.plotly_chart(fig, use_container_width=True)
 
 with c2:
@@ -391,6 +456,7 @@ with c1:
         title="Listed Markets per Exchange (color = unique pairs)",
     )
     fig.update_layout(xaxis_title=None, yaxis_title="Markets", height=420)
+    logos_on_vbar(fig, d["exchange"].tolist())
     st.plotly_chart(fig, use_container_width=True)
 with c2:
     fig = px.scatter(
@@ -416,6 +482,7 @@ with c3:
     )
     fig.update_layout(height=420, xaxis_title=None, yaxis_title="Volume (USD)",
                       legend=dict(orientation="h", y=1.12, title=None))
+    logos_on_vbar(fig, d["exchange"].drop_duplicates().tolist())
     st.plotly_chart(fig, use_container_width=True)
 with c4:
     q = f[f["vol_normalized"].notna()].copy()
@@ -452,6 +519,7 @@ with c5:
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_layout(height=420, xaxis_title=None, yaxis_title="Change vs previous 24h (%)",
                           showlegend=False)
+        logos_on_vbar(fig, vc["exchange"].tolist())
         st.plotly_chart(fig, use_container_width=True)
 with c6:
     chg = (
@@ -476,14 +544,16 @@ with c6:
 
 st.subheader("Exchange Summary")
 st.dataframe(
-    ex_agg.rename(columns={
+    ex_agg.assign(logo=ex_agg["exchange"].map(logo_for)).rename(columns={
+        "logo": "Logo",
         "exchange": "Exchange", "volume": "Volume 24h (USD)", "volume_prev": "Prev. 24h (USD)",
         "vol_chg": "Volume Δ 24h %", "markets": "Markets", "pairs": "Unique Pairs",
         "share": "Share %",
-    })[["Exchange", "Volume 24h (USD)", "Prev. 24h (USD)", "Volume Δ 24h %",
+    })[["Logo", "Exchange", "Volume 24h (USD)", "Prev. 24h (USD)", "Volume Δ 24h %",
         "Markets", "Unique Pairs", "Share %"]],
     use_container_width=True, hide_index=True,
     column_config={
+        "Logo": st.column_config.ImageColumn("Logo", width="small"),
         "Volume 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
         "Prev. 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
         "Volume Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
@@ -647,23 +717,25 @@ st.divider()
 st.header("All Markets")
 bl = f"±{band * 100:g}%"
 show = f.sort_values("volume", ascending=False).copy()
+show["logo"] = show["exchange"].map(logo_for)
 show["Price (quote)"] = show.apply(lambda r: fmt_quote_price(r["price"], r["quote"]), axis=1)
 show["vol_status"] = show["vol_status"].fillna("no volume")
 show = show.rename(columns={
-    "exchange": "Exchange", "pair": "Pair", "venue": "Type", "price_chg": "Price Δ 24h %",
+    "logo": "Logo", "exchange": "Exchange", "pair": "Pair", "venue": "Type", "price_chg": "Price Δ 24h %",
     "volume": "Volume 24h (USD)", "vol_chg": "Volume Δ 24h %", "share": "Share %",
     "vol_normalized": "Normalized Volume (USD)", "vol_status": "Volume Status",
     "spread_pct": "Spread %", "bid_depth": f"Bid Depth {bl} (USD)",
     "ask_depth": f"Ask Depth {bl} (USD)", "maker_fee": "Maker Fee %",
     "taker_fee": "Taker Fee %", "pair_url": "Trade",
 })[[
-    "Exchange", "Pair", "Type", "Price (quote)", "Price Δ 24h %", "Volume 24h (USD)",
+    "Logo", "Exchange", "Pair", "Type", "Price (quote)", "Price Δ 24h %", "Volume 24h (USD)",
     "Volume Δ 24h %", "Share %", "Normalized Volume (USD)", "Volume Status", "Spread %",
     f"Bid Depth {bl} (USD)", f"Ask Depth {bl} (USD)", "Maker Fee %", "Taker Fee %", "Trade",
 ]]
 st.dataframe(
     show, use_container_width=True, hide_index=True,
     column_config={
+        "Logo": st.column_config.ImageColumn("Logo", width="small"),
         "Price Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
         "Volume 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
         "Volume Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
@@ -678,7 +750,7 @@ st.dataframe(
     },
 )
 st.download_button(
-    "⬇️ Download markets (CSV)", show.to_csv(index=False).encode("utf-8"),
+    "⬇️ Download markets (CSV)", show.drop(columns=["Logo"]).to_csv(index=False).encode("utf-8"),
     file_name="squid_quid_markets.csv", mime="text/csv",
 )
 
