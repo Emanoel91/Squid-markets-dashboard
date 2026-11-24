@@ -386,21 +386,21 @@ st.markdown(
 )
 
 # ─────────────────────────────── KPIs ─────────────────────────────────
-CARD_COLOR = "#e6fb34"      # KPI theme colour
-NEUTRAL_SUB = "#5c6600"     # dark olive for labels / footnotes (readable on the light lime card)
-POS_COLOR = "#16a34a"       # green for positive change
-NEG_COLOR = "#dc2626"       # red for negative change
+CARD_COLOR = "#e6fb34"
+NEUTRAL_SUB = "#5f6b00"
+POS_COLOR = "#16a34a"   # green for positive change
+NEG_COLOR = "#dc2626"   # red for negative change
 
 
 def kpi_card(col, label: str, value: str, sub: str = None, sub_color: str = NEUTRAL_SUB):
-    """Bold KPI card with an #e6fb34 colour pattern; `sub` is the footnote under the value."""
+    """Bold KPI card with a #e6fb34 colour pattern; `sub` is the footnote under the value."""
     sub_html = (f'<div style="font-size:14px; font-weight:700; color:{sub_color}; margin-top:2px;">{sub}</div>'
                 if sub else '<div style="font-size:14px; margin-top:2px;">&nbsp;</div>')
     col.markdown(
         f"""
-<div style="background:linear-gradient(180deg,#fcffe3 0%,#f4fdb4 100%); border:1.5px solid {CARD_COLOR};
+<div style="background:linear-gradient(180deg,#fcffe6 0%,#f4fda6 100%); border:1.5px solid {CARD_COLOR};
             border-left:6px solid {CARD_COLOR}; border-radius:14px; padding:14px 16px; margin-bottom:14px;
-            box-shadow:0 2px 8px rgba(230,251,52,0.35); height:130px; box-sizing:border-box;">
+            box-shadow:0 2px 8px rgba(230,251,52,0.35); min-height:118px;">
   <div style="font-size:14px; font-weight:700; color:{NEUTRAL_SUB};">{label}</div>
   <div style="font-size:28px; font-weight:800; color:#1a1a1a; line-height:1.25; word-break:break-word;">{value}</div>
   {sub_html}
@@ -413,26 +413,31 @@ def kpi_card(col, label: str, value: str, sub: str = None, sub_color: str = NEUT
 def change_sub(chg, label: str):
     """Footnote text + colour for a % change: green if positive, red if negative."""
     if chg is None or pd.isna(chg):
-        return None, NEUTRAL_SUB
+        return "N/A", "#6b7280"
     arrow = "▲" if chg > 0 else "▼" if chg < 0 else "●"
     color = POS_COLOR if chg > 0 else NEG_COLOR if chg < 0 else "#6b7280"
-    return f"{arrow} {chg:+.2f}% {label}", color
+    return f"{arrow} {chg:+.2f}% vs {label}", color
 
 
 vol_chg_total = (
-    (total_vol / total_prev - 1) * 100
-    if pd.notna(total_prev) and total_prev > 0 else None
+    (total_vol / total_prev - 1) * 100 if pd.notna(total_prev) and total_prev > 0 else None
 )
+top3_names = ", ".join(ex_agg["exchange"].head(3).tolist())
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
-txt, clr = change_sub(price_chg, "(24h)")
-kpi_card(k1, "QUID Price (USD)", f"${price_usd:,.4f}" if price_usd else "—", txt, clr)
-txt, clr = change_sub(vol_chg_total, "vs prev. 24h")
-kpi_card(k2, "Total Volume (24h)", fmt_usd(total_vol), txt, clr)
-kpi_card(k3, "Exchanges", f"{f['exchange'].nunique():,}")
-kpi_card(k4, "Unique Pairs", f"{f['pair'].nunique():,}")
-kpi_card(k5, "Top Exchange Share", f"{top1:.1f}%", ex_agg["exchange"].iloc[0])
-kpi_card(k6, "Top-3 Exchanges Share", f"{top3:.1f}%")
+# Row 1 — Price / Volume (with change footnotes) / Exchanges
+r1 = st.columns(3)
+txt, clr = change_sub(price_chg, "24h ago")
+kpi_card(r1[0], "QUID Price (USD)", f"${price_usd:,.4f}" if price_usd else "N/A", txt, clr)
+txt, clr = change_sub(vol_chg_total, "previous 24h")
+kpi_card(r1[1], "Total Volume (24h)", fmt_usd(total_vol), txt, clr)
+kpi_card(r1[2], "Exchanges", f"{f['exchange'].nunique():,}", f"{len(f):,} listed markets")
+
+# Row 2 — Pairs / concentration
+r2 = st.columns(3)
+kpi_card(r2[0], "Unique Pairs", f"{f['pair'].nunique():,}",
+         f"Top pair: {pair_agg['pair'].iloc[0]}" if len(pair_agg) else None)
+kpi_card(r2[1], "Top Exchange Share", f"{top1:.1f}%", f"🏆 {ex_agg['exchange'].iloc[0]}")
+kpi_card(r2[2], "Top-3 Exchanges Share", f"{top3:.1f}%", top3_names)
 
 st.divider()
 
