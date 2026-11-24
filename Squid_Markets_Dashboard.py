@@ -53,6 +53,8 @@ _plotly_chart = st.plotly_chart
 
 def _plotly_chart_big_title(fig, *args, **kwargs):
     fig.update_layout(title_font=dict(size=CHART_TITLE_SIZE))
+    # Let pie charts grow their margins so outside labels are never cut off.
+    fig.update_traces(automargin=True, selector=dict(type="pie"))
     return _plotly_chart(fig, *args, **kwargs)
 
 
@@ -126,6 +128,28 @@ def logos_on_vbar(fig, categories, size=0.1, bottom_margin=120):
             xanchor="center", yanchor="top", yshift=-(34 if url else 6),
         )
     fig.update_layout(margin=dict(b=bottom_margin))
+    return fig
+
+
+def pad_value_axis(fig, axis="y", pad=0.2, log=False):
+    """Leave headroom on the value axis so labels placed outside the bars are not clipped
+    by the edge of the chart. `axis` is the axis that carries the values ("y" or "x")."""
+    vals = []
+    for t in fig.data:
+        v = t.y if axis == "y" else t.x
+        if v is not None:
+            vals += [float(x) for x in v if x is not None and not pd.isna(x)]
+    if not vals:
+        return fig
+    upd = fig.update_yaxes if axis == "y" else fig.update_xaxes
+    if log:
+        pos = [x for x in vals if x > 0]
+        if pos:
+            upd(range=[float(np.log10(min(pos))) - 0.5, float(np.log10(max(pos))) + 0.4])
+        return fig
+    lo, hi = min(vals + [0.0]), max(vals + [0.0])
+    span = (hi - lo) or 1.0
+    upd(range=[lo - pad * span if lo < 0 else lo, hi + pad * span if hi > 0 else hi])
     return fig
 
 
@@ -500,6 +524,7 @@ with c1:
                       xaxis_title="Volume (USD)", height=480)
     fig.update_traces(textposition="outside", cliponaxis=False)
     logos_on_hbar(fig, d["exchange"].tolist())
+    pad_value_axis(fig, "x")
     st.plotly_chart(fig, use_container_width=True)
 
 with c2:
@@ -541,6 +566,8 @@ with c1:
         )
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_layout(height=430, xaxis_title=None, yaxis_title="Volume (USD)", showlegend=False)
+        logos_on_vbar(fig, d7["exchange"].tolist())
+        pad_value_axis(fig, "y")
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No 7d volume recorded yet.")
@@ -555,11 +582,6 @@ with c2:
         fig.update_layout(height=430, showlegend=False)
         st.plotly_chart(fig, use_container_width=True)
 
-st.caption(
-    f"Daily history: {n_recorded_days} recorded day(s). Each day's 24h volume is recorded at the end of "
-    "the day by `collect_daily_snapshot.py`; until then the latest bar shows today's live 24h snapshot. "
-    f"7d figures add up the last {n_days_7d} recorded day(s) (up to {WINDOW_DAYS})."
-)
 
 tm = f[f["volume"] > 0]
 if not tm.empty:
@@ -652,6 +674,7 @@ with c5:
         fig.update_layout(height=420, xaxis_title=None, yaxis_title="Change vs previous 24h (%)",
                           showlegend=False)
         logos_on_vbar(fig, vc["exchange"].tolist())
+        pad_value_axis(fig, "y")
         st.plotly_chart(fig, use_container_width=True)
 with c6:
     chg = (
@@ -707,6 +730,7 @@ with c1:
     )
     fig.update_traces(textposition="outside", cliponaxis=False)
     fig.update_layout(yaxis_title=None, xaxis_title="Volume (USD)", height=480)
+    pad_value_axis(fig, "x")
     st.plotly_chart(fig, use_container_width=True)
 with c2:
     s = top_n_with_others(pair_agg.set_index("pair")["volume"], 10)
@@ -767,6 +791,7 @@ with cq2:
         )
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_layout(height=max(380, 28 * len(d) + 110), yaxis_title=None, xaxis_title="Volume (USD)")
+        pad_value_axis(fig, "x")
         st.plotly_chart(fig, use_container_width=True)
 
 c3, c4 = st.columns(2)
@@ -791,6 +816,7 @@ with c4:
         )
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_layout(height=420, yaxis_title=None, xaxis_title="Change (%)", showlegend=False)
+        pad_value_axis(fig, "x")
         st.plotly_chart(fig, use_container_width=True)
 st.caption("Price changes are measured in each market's own quote currency (KRW, USDT, EUR, ...).")
 
@@ -868,6 +894,7 @@ with c2:
         )
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_layout(height=480, yaxis_title=None, xaxis_title="Spread (%)", showlegend=False)
+        pad_value_axis(fig, "x", log=True)
         st.plotly_chart(fig, use_container_width=True)
 st.caption(
     "Depth = USD value of resting bids/asks within the selected distance from the market price. "
