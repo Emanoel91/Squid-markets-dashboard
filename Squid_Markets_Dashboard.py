@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -351,6 +352,28 @@ hist_all["date"] = pd.to_datetime(hist_all["date"])
 hist_all["day"] = hist_all["date"].dt.strftime("%Y-%m-%d")
 n_recorded_days = hist["date"].nunique() if not hist.empty else 0
 
+# ── 7-day window, built from the recorded daily history (last 7 calendar days up to the latest day)
+WINDOW_DAYS = 7
+_cutoff = hist_all["date"].max() - pd.Timedelta(days=WINDOW_DAYS - 1)
+h7 = hist_all[hist_all["date"] >= _cutoff].copy()
+n_days_7d = h7["day"].nunique()
+vol_7d = h7["volume"].sum()
+avg_daily_7d = vol_7d / n_days_7d if n_days_7d else None
+ex_7d = h7.groupby("exchange")["volume"].sum()
+pair_agg["volume_7d"] = pair_agg["pair"].map(h7.groupby("pair")["volume"].sum()).fillna(0)
+pair_agg["share_7d"] = pair_agg["volume_7d"] / vol_7d * 100 if vol_7d > 0 else 0.0
+
+# Quote currency per pair: taken from the live data, with a fallback that parses the pair name
+# (the recorded history has no quote column).
+_pair_quote = f[f["quote"] != ""].drop_duplicates("pair").set_index("pair")["quote"].to_dict()
+
+
+def quote_of(pair):
+    if pair in _pair_quote:
+        return _pair_quote[pair]
+    parts = [p for p in re.split(r"[/\-_:\s]+", str(pair)) if p]
+    return parts[-1] if len(parts) > 1 else "Unknown"
+
 seg = nested(data, "segments", "spot") or next(iter((data.get("segments") or {}).values()), {}) or {}
 price_usd = seg.get("price")
 price_chg = pct(seg.get("price_change_24h"))
@@ -374,6 +397,20 @@ if last_updated:
         last_updated = str(last_updated)[:10]
     st.caption(f"last_updated: {last_updated}")
 
+ABOUT_COLOR = "#d0a4e7"
+st.markdown(
+    f"""
+    <div style="background:linear-gradient(180deg,#faf3fd 0%,#f1e0f8 100%); border:1.5px solid {ABOUT_COLOR};
+                border-left:6px solid {ABOUT_COLOR}; border-radius:12px; padding:14px 18px; margin:6px 0 14px 0;
+                color:#1a1a1a; font-size:16px; line-height:1.6;">
+        This dashboard shows how the <b>Squid (QUID)</b> token trades across <b>centralized exchanges (CEXs)</b>:
+        24h and 7d trading volume, each exchange's market share, listed markets and trading pairs, quote
+        currencies, price moves, order-book depth and bid-ask spreads, plus the daily volume history recorded over time.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.markdown(
     f"""
     <div class="link-row">
@@ -386,21 +423,21 @@ st.markdown(
 )
 
 # ─────────────────────────────── KPIs ─────────────────────────────────
-CARD_COLOR = "#e6fb34"
-NEUTRAL_SUB = "#5f6b00"
-POS_COLOR = "#16a34a"   # green for positive change
-NEG_COLOR = "#dc2626"   # red for negative change
+CARD_COLOR = "#e6fb34"      # KPI theme colour
+NEUTRAL_SUB = "#5f6b00"     # dark olive for labels / footnotes (readable on the light lime card)
+POS_COLOR = "#16a34a"       # green for positive change
+NEG_COLOR = "#dc2626"       # red for negative change
 
 
 def kpi_card(col, label: str, value: str, sub: str = None, sub_color: str = NEUTRAL_SUB):
-    """Bold KPI card with a #e6fb34 colour pattern; `sub` is the footnote under the value."""
+    """Bold KPI card with an #e6fb34 colour pattern; `sub` is the footnote under the value."""
     sub_html = (f'<div style="font-size:14px; font-weight:700; color:{sub_color}; margin-top:2px;">{sub}</div>'
                 if sub else '<div style="font-size:14px; margin-top:2px;">&nbsp;</div>')
     col.markdown(
         f"""
 <div style="background:linear-gradient(180deg,#fcffe6 0%,#f4fda6 100%); border:1.5px solid {CARD_COLOR};
             border-left:6px solid {CARD_COLOR}; border-radius:14px; padding:14px 16px; margin-bottom:14px;
-            box-shadow:0 2px 8px rgba(230,251,52,0.35); min-height:118px;">
+            box-shadow:0 2px 8px rgba(230,251,52,0.35); height:140px; box-sizing:border-box;">
   <div style="font-size:14px; font-weight:700; color:{NEUTRAL_SUB};">{label}</div>
   <div style="font-size:28px; font-weight:800; color:#1a1a1a; line-height:1.25; word-break:break-word;">{value}</div>
   {sub_html}
@@ -420,24 +457,30 @@ def change_sub(chg, label: str):
 
 
 vol_chg_total = (
-    (total_vol / total_prev - 1) * 100 if pd.notna(total_prev) and total_prev > 0 else None
+    (total_vol / total_prev - 1) * 100
+    if pd.notna(total_prev) and total_prev > 0 else None
 )
-top3_names = ", ".join(ex_agg["exchange"].head(3).tolist())
 
-# Row 1 — Price / Volume (with change footnotes) / Exchanges
-r1 = st.columns(3)
+top3_names = ", ".join(ex_agg["exchange"].head(3).tolist())
+days_note = (f"Last {n_days_7d} recorded day(s)" if n_days_7d < WINDOW_DAYS else f"Last {WINDOW_DAYS} days")
+
+# Row 1 — Price / Volume 24h / Volume 7d / Avg daily volume 7d
+r1 = st.columns(4)
 txt, clr = change_sub(price_chg, "24h ago")
 kpi_card(r1[0], "QUID Price (USD)", f"${price_usd:,.4f}" if price_usd else "N/A", txt, clr)
 txt, clr = change_sub(vol_chg_total, "previous 24h")
 kpi_card(r1[1], "Total Volume (24h)", fmt_usd(total_vol), txt, clr)
-kpi_card(r1[2], "Exchanges", f"{f['exchange'].nunique():,}", f"{len(f):,} listed markets")
+kpi_card(r1[2], "Total Volume (7d)", fmt_usd(vol_7d), days_note)
+kpi_card(r1[3], "Avg Daily Volume (7d)", fmt_usd(avg_daily_7d),
+         f"Total ÷ {n_days_7d} recorded day(s)" if n_days_7d else None)
 
-# Row 2 — Pairs / concentration
-r2 = st.columns(3)
-kpi_card(r2[0], "Unique Pairs", f"{f['pair'].nunique():,}",
+# Row 2 — Exchanges / Pairs / concentration
+r2 = st.columns(4)
+kpi_card(r2[0], "Exchanges", f"{f['exchange'].nunique():,}", f"{len(f):,} listed markets")
+kpi_card(r2[1], "Unique Pairs", f"{f['pair'].nunique():,}",
          f"Top pair: {pair_agg['pair'].iloc[0]}" if len(pair_agg) else None)
-kpi_card(r2[1], "Top Exchange Share", f"{top1:.1f}%", f"🏆 {ex_agg['exchange'].iloc[0]}")
-kpi_card(r2[2], "Top-3 Exchanges Share", f"{top3:.1f}%", top3_names)
+kpi_card(r2[2], "Top Exchange Share", f"{top1:.1f}%", f"🏆 {ex_agg['exchange'].iloc[0]}")
+kpi_card(r2[3], "Top-3 Exchanges Share", f"{top3:.1f}%", top3_names)
 
 st.divider()
 
@@ -483,9 +526,39 @@ with c2:
                           normalized=True, order=ex_order),
         use_container_width=True,
     )
+# ── 7-day volume by exchange (same colours as the over-time charts)
+ex7 = ex_7d[ex_7d > 0].sort_values(ascending=False)
+ex_colors = {ex: PALETTE[i % len(PALETTE)] for i, ex in enumerate(list(ex_order) + [e for e in ex7.index if e not in ex_order])}
+ex_colors["Others"] = "#b8b8b8"
+
+c1, c2 = st.columns(2)
+with c1:
+    if not ex7.empty:
+        d7 = ex7.rename_axis("exchange").reset_index(name="volume_7d")
+        fig = px.bar(
+            d7, x="exchange", y="volume_7d", color="exchange", color_discrete_map=ex_colors,
+            text=d7["volume_7d"].map(fmt_usd), title="Total Trading Volume (7d) by Exchange",
+        )
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        fig.update_layout(height=430, xaxis_title=None, yaxis_title="Volume (USD)", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No 7d volume recorded yet.")
+with c2:
+    if not ex7.empty:
+        s7 = top_n_with_others(ex7, 10)
+        fig = px.pie(
+            names=s7.index, values=s7.values, color=s7.index, color_discrete_map=ex_colors,
+            title="7d Volume Share by Exchange",
+        )
+        fig.update_traces(pull=[0.08] * len(s7), textinfo="percent+label")
+        fig.update_layout(height=430, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+
 st.caption(
     f"Daily history: {n_recorded_days} recorded day(s). Each day's 24h volume is recorded at the end of "
-    "the day by `collect_daily_snapshot.py`; until then the latest bar shows today's live 24h snapshot."
+    "the day by `collect_daily_snapshot.py`; until then the latest bar shows today's live 24h snapshot. "
+    f"7d figures add up the last {n_days_7d} recorded day(s) (up to {WINDOW_DAYS})."
 )
 
 tm = f[f["volume"] > 0]
@@ -668,6 +741,34 @@ with cp2:
         use_container_width=True,
     )
 
+cq1, cq2 = st.columns(2)
+with cq1:
+    q7 = h7.assign(quote=h7["pair"].map(quote_of)).groupby("quote")["volume"].sum()
+    q7 = q7[q7 > 0].sort_values(ascending=False)
+    if not q7.empty:
+        fig = px.pie(
+            names=q7.index, values=q7.values, color_discrete_sequence=PALETTE,
+            title="7d Volume by Quote Currency",
+        )
+        fig.update_traces(pull=[0.08] * len(q7), textinfo="percent+label")
+        fig.update_layout(height=430, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No 7d volume recorded yet.")
+with cq2:
+    tp = pairs_hist.groupby("pair")["volume"].sum()
+    tp = tp[tp > 0].sort_values(ascending=False).head(TOP_N).sort_values()   # largest at the top
+    if not tp.empty:
+        d = tp.rename_axis("pair").reset_index(name="volume")
+        fig = px.bar(
+            d, x="volume", y="pair", orientation="h", text=d["volume"].map(fmt_usd),
+            color_discrete_sequence=["#4c78a8"],
+            title=f"Total Volume by Token Pair (top {len(d)}, all recorded days)",
+        )
+        fig.update_traces(textposition="outside", cliponaxis=False)
+        fig.update_layout(height=max(380, 28 * len(d) + 110), yaxis_title=None, xaxis_title="Volume (USD)")
+        st.plotly_chart(fig, use_container_width=True)
+
 c3, c4 = st.columns(2)
 with c3:
     if not quote_agg.empty and quote_agg["volume"].sum() > 0:
@@ -710,12 +811,15 @@ if not hm.empty:
 st.subheader("Pair Summary")
 st.dataframe(
     pair_agg.rename(columns={
-        "pair": "Pair", "volume": "Volume 24h (USD)", "exchanges": "Exchanges", "share": "Share %",
-    }),
+        "pair": "Pair", "volume": "Volume 24h (USD)", "volume_7d": "Volume 7d (USD)",
+        "exchanges": "Exchanges", "share": "Share 24h %", "share_7d": "Share 7d %",
+    })[["Pair", "Volume 24h (USD)", "Volume 7d (USD)", "Exchanges", "Share 24h %", "Share 7d %"]],
     use_container_width=True, hide_index=True,
     column_config={
         "Volume 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
-        "Share %": st.column_config.ProgressColumn(format="%.2f%%", min_value=0, max_value=100),
+        "Volume 7d (USD)": st.column_config.NumberColumn(format="$%.0f"),
+        "Share 24h %": st.column_config.ProgressColumn(format="%.2f%%", min_value=0, max_value=100),
+        "Share 7d %": st.column_config.ProgressColumn(format="%.2f%%", min_value=0, max_value=100),
     },
 )
 
@@ -817,11 +921,13 @@ st.download_button(
 # METRIC GLOSSARY — RENDERED AT THE BOTTOM OF THE PAGE
 # =========================================================
 def render_metric_glossary():
-    st.subheader("📖 Metric Glossary")
-    st.markdown(
+    glossary_box = st.expander("Metric Glossary")
+    glossary_box.markdown(
         """
         - **QUID Price (USD):** Aggregate spot price reported by the API, with its 24h change.
         - **Total Volume (24h):** Sum of the reported 24h trading volume (USD) across all QUID markets, compared with the previous 24h.
+        - **Total Volume (7d):** Sum of the daily 24h volume snapshots recorded over the last 7 days (fewer if less history exists).
+        - **Avg Daily Volume (7d):** Total Volume (7d) divided by the number of recorded days in that window.
         - **Exchanges:** Number of unique exchanges listing QUID markets.
         - **Unique Pairs:** Number of distinct trading pairs across all exchanges.
         - **Top Exchange Share:** Share of total volume handled by the largest exchange.
@@ -840,6 +946,20 @@ def render_metric_glossary():
 st.markdown("---")
 
 render_metric_glossary()
+
+st.markdown(
+    f"""
+    <div style="background:linear-gradient(180deg,#faf3fd 0%,#f1e0f8 100%); border:1.5px solid {ABOUT_COLOR};
+                border-left:6px solid {ABOUT_COLOR}; border-radius:12px; padding:14px 18px; margin:18px 0 6px 0;
+                color:#1a1a1a; font-size:15px; line-height:1.6;">
+        <b>Support our work.</b> Maintaining this dashboard — keeping the data pipeline running, recording daily
+        snapshots and building new analytics — takes continuous effort. If you find it valuable, we would greatly
+        appreciate your support, whether financial, through feedback, or by sharing it with others. Every
+        contribution helps us keep improving it. A donation address is provided below.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     """
