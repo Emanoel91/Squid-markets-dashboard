@@ -153,6 +153,33 @@ def pad_value_axis(fig, axis="y", pad=0.2, log=False):
     return fig
 
 
+def exploded_pie(s, title, color_map=None, height=430, pull=0.08):
+    """Exploded pie where names and percentages live in the legend, so tiny slices never need
+    outside labels (which pile up and get clipped). Only slices big enough to fit show a % inside."""
+    s = s[s > 0]
+    total = s.sum()
+
+    def _pct(v):
+        p = v / total * 100
+        return f"{p:.2f}%" if p >= 0.01 else "<0.01%"
+
+    labels = [f"{n} · {_pct(v)}" for n, v in s.items()]
+    colors = [(color_map or {}).get(n, PALETTE[i % len(PALETTE)]) for i, n in enumerate(s.index)]
+    fig = go.Figure(go.Pie(
+        labels=labels, values=s.values, pull=[pull] * len(s), marker=dict(colors=colors),
+        sort=False, direction="clockwise", textinfo="percent", textposition="inside",
+        insidetextorientation="horizontal",
+        hovertemplate="%{label}<br>Volume: $%{value:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(
+        title=title, height=height, showlegend=True,
+        legend=dict(orientation="v", x=1.02, xanchor="left", y=0.5, yanchor="middle"),
+        uniformtext=dict(minsize=11, mode="hide"),
+        margin=dict(l=20, r=20, t=60, b=20),
+    )
+    return fig
+
+
 # ─────────────────────────────── Helpers ──────────────────────────────
 @st.cache_data(ttl=600, show_spinner="Fetching data from DefiLlama...")
 def fetch(url: str):
@@ -574,12 +601,7 @@ with c1:
 with c2:
     if not ex7.empty:
         s7 = top_n_with_others(ex7, 10)
-        fig = px.pie(
-            names=s7.index, values=s7.values, color=s7.index, color_discrete_map=ex_colors,
-            title="7d Volume Share by Exchange",
-        )
-        fig.update_traces(pull=[0.08] * len(s7), textinfo="percent+label")
-        fig.update_layout(height=430, showlegend=False)
+        fig = exploded_pie(s7, "7d Volume Share by Exchange", ex_colors)
         st.plotly_chart(fig, use_container_width=True)
 
 
@@ -770,12 +792,7 @@ with cq1:
     q7 = h7.assign(quote=h7["pair"].map(quote_of)).groupby("quote")["volume"].sum()
     q7 = q7[q7 > 0].sort_values(ascending=False)
     if not q7.empty:
-        fig = px.pie(
-            names=q7.index, values=q7.values, color_discrete_sequence=PALETTE,
-            title="7d Volume by Quote Currency",
-        )
-        fig.update_traces(pull=[0.08] * len(q7), textinfo="percent+label")
-        fig.update_layout(height=430, showlegend=False)
+        fig = exploded_pie(q7, "7d Volume by Quote Currency")
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No 7d volume recorded yet.")
