@@ -1,6 +1,16 @@
+"""
+Squid (QUID) Markets Dashboard
+Data source: https://defillama.com/api/public/markets/squid-3
+
+Run:
+    pip install streamlit pandas numpy requests plotly
+    streamlit run squid_markets_dashboard.py
+"""
+
 import json
 import os
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -34,112 +44,14 @@ st.markdown(
     <style>
     [data-testid="stSidebar"], [data-testid="collapsedControl"],
     [data-testid="stSidebarCollapsedControl"] {display: none;}
-    .block-container {padding-top: 3.5rem;}
-    div[data-testid="stMetric"] {
-        background: rgba(128,128,128,0.08);
-        border: 1px solid rgba(128,128,128,0.25);
-        border-radius: 12px;
-        padding: 14px 18px;
-        height: 130px;
-        box-sizing: border-box;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-    }
-    div[data-testid="stMetricLabel"] p {font-size: 0.85rem; opacity: 0.75;}
-    div[data-testid="stMetricValue"],
-    div[data-testid="stMetricValue"] * {font-weight: 700 !important;}
-    .app-header {display: flex; align-items: center; gap: 16px; margin-bottom: 0.5rem;}
-    .app-header img {width: 64px; height: 64px; object-fit: contain; border-radius: 12px; flex-shrink: 0;}
-    .app-header h1 {margin: 0; padding: 0; line-height: 1.25;}
-    .link-row a {text-decoration: none;}
-    .link-row img {height: 18px; width: 18px; vertical-align: middle; margin-right: 6px;}
+    .block-container {padding-top: 2rem;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Larger chart titles on every Plotly chart rendered by the app.
-CHART_TITLE_SIZE = 20
-_plotly_chart = st.plotly_chart
-
-
-def _plotly_chart_big_title(fig, *args, **kwargs):
-    fig.update_layout(title_font=dict(size=CHART_TITLE_SIZE))
-    return _plotly_chart(fig, *args, **kwargs)
-
-
-st.plotly_chart = _plotly_chart_big_title
-
-WEBSITE_ICON = "data:image/png;base64,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"
-X_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAAAAABXZoBIAAAAqUlEQVR4AdXQEQwCUQDG8b87pFkcRmGuyfFpFB+HuZ20/DA4yndLHj17dHJ08G/V1qp7vvWjT77t28cfKlIIMS54KmPa8uli35l4WGvNtyQ7G2CmF37M7WncQe+NidKW5CyYyDhboY5kRZelLshz5OyevK0dySVZNz1iT07r0LkpbJmqdcUoJyt+VVrAxkB0NRnzKhysGQfevt++mgavfOpi844hhFjyf+4xHWjgrPr73gAAAABJRU5ErkJggg=="
-
 PALETTE = px.colors.qualitative.Set2
 GREEN, RED = "#54a24b", "#e45756"
-
-# ─────────────────────────── Exchange logos ───────────────────────────
-# Keys are lowercase exchange names. Matching is case-insensitive and also accepts
-# names that contain the key (e.g. "Bitget Futures" -> "bitget").
-EXCHANGE_LOGOS = {
-    "upbit": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/351.png",
-    "bithumb": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/200.png",
-    "mexc": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/544.png",
-    "bitget": "https://s2.coinmarketcap.com/static/img/coins/64x64/11092.png",
-    "kraken": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/24.png",
-    "bitvavo": "https://s2.coinmarketcap.com/static/img/exchanges/64x64/520.png",
-}
-
-
-def logo_for(name):
-    """Return the logo URL for an exchange name, or None if unknown."""
-    if not isinstance(name, str):
-        return None
-    n = name.strip().lower()
-    if n in EXCHANGE_LOGOS:
-        return EXCHANGE_LOGOS[n]
-    for key, url in EXCHANGE_LOGOS.items():
-        if key in n:
-            return url
-    return None
-
-
-def logos_on_hbar(fig, categories, size=0.05, left_margin=150):
-    """Horizontal bar chart: logo + name to the left of each bar.
-    `categories` must be in bottom-to-top order (same as the y axis)."""
-    fig.update_yaxes(categoryorder="array", categoryarray=list(categories), showticklabels=False)
-    for i, name in enumerate(categories):
-        url = logo_for(name)
-        if url:
-            fig.add_layout_image(
-                source=url, xref="paper", yref="y", x=0, y=i,
-                sizex=size, sizey=0.8, xanchor="right", yanchor="middle",
-                sizing="contain", layer="above",
-            )
-        fig.add_annotation(
-            x=0, y=i, xref="paper", yref="y", text=str(name), showarrow=False,
-            xanchor="right", yanchor="middle", xshift=-(34 if url else 6),
-        )
-    fig.update_layout(margin=dict(l=left_margin))
-    return fig
-
-
-def logos_on_vbar(fig, categories, size=0.1, bottom_margin=120):
-    """Vertical bar chart: logo + name below each bar (left-to-right order)."""
-    fig.update_xaxes(categoryorder="array", categoryarray=list(categories), showticklabels=False)
-    for i, name in enumerate(categories):
-        url = logo_for(name)
-        if url:
-            fig.add_layout_image(
-                source=url, xref="x", yref="paper", x=i, y=0,
-                sizex=0.8, sizey=size, xanchor="center", yanchor="top",
-                sizing="contain", layer="above",
-            )
-        fig.add_annotation(
-            x=i, y=0, xref="x", yref="paper", text=str(name), showarrow=False,
-            xanchor="center", yanchor="top", yshift=-(34 if url else 6),
-        )
-    fig.update_layout(margin=dict(b=bottom_margin))
-    return fig
 
 
 # ─────────────────────────────── Helpers ──────────────────────────────
@@ -370,15 +282,11 @@ price_usd = seg.get("price")
 price_chg = pct(seg.get("price_change_24h"))
 
 # ─────────────────────────────── Header ───────────────────────────────
-st.markdown(
-    f"""
-    <div class="app-header">
-        <img src="{LOGO_URL}" alt="Squid logo">
-        <h1>Squid (QUID) — Markets Analytics Dashboard</h1>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+logo_col, title_col = st.columns([1, 14], vertical_alignment="center")
+with logo_col:
+    st.image(LOGO_URL, width=64)
+with title_col:
+    st.title("Squid (QUID) — Markets Analytics Dashboard")
 
 last_updated = data.get("last_updated")
 if last_updated:
@@ -389,33 +297,63 @@ if last_updated:
     st.caption(f"last_updated: {last_updated}")
 
 st.markdown(
-    f"""
-    <div class="link-row">
-        <a href="https://www.squidrouter.com/" target="_blank"><img src="{WEBSITE_ICON}" alt="">Squid Website</a>
-        &nbsp;&nbsp;|&nbsp;&nbsp;
-        <a href="https://x.com/squidrouter" target="_blank"><img src="{X_ICON}" alt="">Squid X Account</a>
-    </div>
-    """,
-    unsafe_allow_html=True,
+    "[🌐 Squid Website](https://www.squidrouter.com/) &nbsp;&nbsp;|&nbsp;&nbsp; "
+    "[🐦 Squid X Account](https://x.com/squidrouter)"
 )
 
 # ─────────────────────────────── KPIs ─────────────────────────────────
-vol_delta = (
-    f"{(total_vol / total_prev - 1) * 100:+.2f}% vs prev. 24h"
-    if pd.notna(total_prev) and total_prev > 0 else None
-)
+CARD_COLOR = "#e6fb34"
+NEUTRAL_SUB = "#5f6b00"
+POS_COLOR = "#16a34a"   # green for positive change
+NEG_COLOR = "#dc2626"   # red for negative change
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
-k1.metric(
-    "QUID Price (USD)",
-    f"${price_usd:,.4f}" if price_usd else "—",
-    f"{price_chg:+.2f}% (24h)" if price_chg is not None else None,
+
+def kpi_card(col, label: str, value: str, sub: str = None, sub_color: str = NEUTRAL_SUB):
+    """Bold KPI card with a #e6fb34 colour pattern; `sub` is the footnote under the value."""
+    sub_html = (f'<div style="font-size:14px; font-weight:700; color:{sub_color}; margin-top:2px;">{sub}</div>'
+                if sub else '<div style="font-size:14px; margin-top:2px;">&nbsp;</div>')
+    col.markdown(
+        f"""
+<div style="background:linear-gradient(180deg,#fcffe6 0%,#f4fda6 100%); border:1.5px solid {CARD_COLOR};
+            border-left:6px solid {CARD_COLOR}; border-radius:14px; padding:14px 16px; margin-bottom:14px;
+            box-shadow:0 2px 8px rgba(230,251,52,0.35); min-height:118px;">
+  <div style="font-size:14px; font-weight:700; color:{NEUTRAL_SUB};">{label}</div>
+  <div style="font-size:28px; font-weight:800; color:#1a1a1a; line-height:1.25; word-break:break-word;">{value}</div>
+  {sub_html}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def change_sub(chg, label: str):
+    """Footnote text + colour for a % change: green if positive, red if negative."""
+    if chg is None or pd.isna(chg):
+        return "N/A", "#6b7280"
+    arrow = "▲" if chg > 0 else "▼" if chg < 0 else "●"
+    color = POS_COLOR if chg > 0 else NEG_COLOR if chg < 0 else "#6b7280"
+    return f"{arrow} {chg:+.2f}% vs {label}", color
+
+
+vol_chg_total = (
+    (total_vol / total_prev - 1) * 100 if pd.notna(total_prev) and total_prev > 0 else None
 )
-k2.metric("Total Volume (24h)", fmt_usd(total_vol), vol_delta)
-k3.metric("Exchanges", f"{f['exchange'].nunique():,}")
-k4.metric("Unique Pairs", f"{f['pair'].nunique():,}")
-k5.metric("Top Exchange Share", f"{top1:.1f}%", help=ex_agg["exchange"].iloc[0])
-k6.metric("Top-3 Exchanges Share", f"{top3:.1f}%")
+top3_names = ", ".join(ex_agg["exchange"].head(3).tolist())
+
+# Row 1 — Price / Volume (with change footnotes) / Exchanges
+r1 = st.columns(3)
+txt, clr = change_sub(price_chg, "24h ago")
+kpi_card(r1[0], "QUID Price (USD)", f"${price_usd:,.4f}" if price_usd else "N/A", txt, clr)
+txt, clr = change_sub(vol_chg_total, "previous 24h")
+kpi_card(r1[1], "Total Volume (24h)", fmt_usd(total_vol), txt, clr)
+kpi_card(r1[2], "Exchanges", f"{f['exchange'].nunique():,}", f"{len(f):,} listed markets")
+
+# Row 2 — Pairs / concentration
+r2 = st.columns(3)
+kpi_card(r2[0], "Unique Pairs", f"{f['pair'].nunique():,}",
+         f"Top pair: {pair_agg['pair'].iloc[0]}" if len(pair_agg) else None)
+kpi_card(r2[1], "Top Exchange Share", f"{top1:.1f}%", f"🏆 {ex_agg['exchange'].iloc[0]}")
+kpi_card(r2[2], "Top-3 Exchanges Share", f"{top3:.1f}%", top3_names)
 
 st.divider()
 
@@ -434,7 +372,6 @@ with c1:
     fig.update_layout(coloraxis_showscale=False, yaxis_title=None,
                       xaxis_title="Volume (USD)", height=480)
     fig.update_traces(textposition="outside", cliponaxis=False)
-    logos_on_hbar(fig, d["exchange"].tolist())
     st.plotly_chart(fig, use_container_width=True)
 
 with c2:
@@ -493,7 +430,6 @@ with c1:
         title="Listed Markets per Exchange (color = unique pairs)",
     )
     fig.update_layout(xaxis_title=None, yaxis_title="Markets", height=420)
-    logos_on_vbar(fig, d["exchange"].tolist())
     st.plotly_chart(fig, use_container_width=True)
 with c2:
     fig = px.scatter(
@@ -519,7 +455,6 @@ with c3:
     )
     fig.update_layout(height=420, xaxis_title=None, yaxis_title="Volume (USD)",
                       legend=dict(orientation="h", y=1.12, title=None))
-    logos_on_vbar(fig, d["exchange"].drop_duplicates().tolist())
     st.plotly_chart(fig, use_container_width=True)
 with c4:
     q = f[f["vol_normalized"].notna()].copy()
@@ -556,7 +491,6 @@ with c5:
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_layout(height=420, xaxis_title=None, yaxis_title="Change vs previous 24h (%)",
                           showlegend=False)
-        logos_on_vbar(fig, vc["exchange"].tolist())
         st.plotly_chart(fig, use_container_width=True)
 with c6:
     chg = (
@@ -581,16 +515,14 @@ with c6:
 
 st.subheader("Exchange Summary")
 st.dataframe(
-    ex_agg.assign(logo=ex_agg["exchange"].map(logo_for)).rename(columns={
-        "logo": "Logo",
+    ex_agg.rename(columns={
         "exchange": "Exchange", "volume": "Volume 24h (USD)", "volume_prev": "Prev. 24h (USD)",
         "vol_chg": "Volume Δ 24h %", "markets": "Markets", "pairs": "Unique Pairs",
         "share": "Share %",
-    })[["Logo", "Exchange", "Volume 24h (USD)", "Prev. 24h (USD)", "Volume Δ 24h %",
+    })[["Exchange", "Volume 24h (USD)", "Prev. 24h (USD)", "Volume Δ 24h %",
         "Markets", "Unique Pairs", "Share %"]],
     use_container_width=True, hide_index=True,
     column_config={
-        "Logo": st.column_config.ImageColumn("Logo", width="small"),
         "Volume 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
         "Prev. 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
         "Volume Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
@@ -754,25 +686,23 @@ st.divider()
 st.header("All Markets")
 bl = f"±{band * 100:g}%"
 show = f.sort_values("volume", ascending=False).copy()
-show["logo"] = show["exchange"].map(logo_for)
 show["Price (quote)"] = show.apply(lambda r: fmt_quote_price(r["price"], r["quote"]), axis=1)
 show["vol_status"] = show["vol_status"].fillna("no volume")
 show = show.rename(columns={
-    "logo": "Logo", "exchange": "Exchange", "pair": "Pair", "venue": "Type", "price_chg": "Price Δ 24h %",
+    "exchange": "Exchange", "pair": "Pair", "venue": "Type", "price_chg": "Price Δ 24h %",
     "volume": "Volume 24h (USD)", "vol_chg": "Volume Δ 24h %", "share": "Share %",
     "vol_normalized": "Normalized Volume (USD)", "vol_status": "Volume Status",
     "spread_pct": "Spread %", "bid_depth": f"Bid Depth {bl} (USD)",
     "ask_depth": f"Ask Depth {bl} (USD)", "maker_fee": "Maker Fee %",
     "taker_fee": "Taker Fee %", "pair_url": "Trade",
 })[[
-    "Logo", "Exchange", "Pair", "Type", "Price (quote)", "Price Δ 24h %", "Volume 24h (USD)",
+    "Exchange", "Pair", "Type", "Price (quote)", "Price Δ 24h %", "Volume 24h (USD)",
     "Volume Δ 24h %", "Share %", "Normalized Volume (USD)", "Volume Status", "Spread %",
     f"Bid Depth {bl} (USD)", f"Ask Depth {bl} (USD)", "Maker Fee %", "Taker Fee %", "Trade",
 ]]
 st.dataframe(
     show, use_container_width=True, hide_index=True,
     column_config={
-        "Logo": st.column_config.ImageColumn("Logo", width="small"),
         "Price Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
         "Volume 24h (USD)": st.column_config.NumberColumn(format="$%.0f"),
         "Volume Δ 24h %": st.column_config.NumberColumn(format="%+.2f%%"),
@@ -787,7 +717,7 @@ st.dataframe(
     },
 )
 st.download_button(
-    "⬇️ Download markets (CSV)", show.drop(columns=["Logo"]).to_csv(index=False).encode("utf-8"),
+    "⬇️ Download markets (CSV)", show.to_csv(index=False).encode("utf-8"),
     file_name="squid_quid_markets.csv", mime="text/csv",
 )
 
