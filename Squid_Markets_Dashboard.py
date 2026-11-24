@@ -52,7 +52,14 @@ _plotly_chart = st.plotly_chart
 
 
 def _plotly_chart_big_title(fig, *args, **kwargs):
-    fig.update_layout(title_font=dict(size=CHART_TITLE_SIZE))
+    # Same title position and same top margin on every chart, so side-by-side charts line up:
+    # titles start at the same x/y and the plot areas share the same top edge.
+    fig.update_layout(
+        title=dict(x=0, xref="container", xanchor="left", y=1, yref="container", yanchor="top",
+                   pad=dict(l=8, t=18)),
+        title_font=dict(size=CHART_TITLE_SIZE),
+        margin=dict(t=100),
+    )
     # Let pie charts grow their margins so outside labels are never cut off.
     fig.update_traces(automargin=True, selector=dict(type="pie"))
     return _plotly_chart(fig, *args, **kwargs)
@@ -641,7 +648,8 @@ with c2:
         log_y=bool((ex_agg["volume"] > 0).all()),
         title="Liquidity Map — Markets vs 24h Volume (bubble = volume)",
     )
-    fig.update_layout(height=420, yaxis_title="Volume (USD, log)")
+    fig.update_layout(height=420, yaxis_title="Volume (USD, log)",
+                      margin=dict(b=120))   # same bottom margin as the chart on its left
     st.plotly_chart(fig, use_container_width=True)
 
 c3, c4 = st.columns(2)
@@ -674,7 +682,8 @@ with c4:
             title="Volume Quality — Reported vs Normalized (24h)",
         )
         fig.update_layout(height=420, xaxis_title=None, yaxis_title="Volume (USD)",
-                          legend=dict(orientation="h", y=1.12, title=None))
+                          legend=dict(orientation="h", y=1.12, title=None),
+                          margin=dict(b=120))   # same bottom margin as the chart on its left
         st.plotly_chart(fig, use_container_width=True)
 st.caption(
     "Normalized volume is the API's adjusted volume figure (`nvol`). Where it is lower than the "
@@ -716,7 +725,8 @@ with c6:
         fig.add_hline(y=0, line_dash="dash", line_color="gray")
         fig.update_layout(height=420, xaxis_title=None, xaxis_type="category",
                           yaxis_title="Change vs previous 24h (%)",
-                          legend=dict(orientation="h", y=-0.2, title=None))
+                          legend=dict(orientation="h", y=-0.2, title=None),
+                          margin=dict(b=120))   # same bottom margin as the chart on its left
         st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("Exchange Summary")
@@ -807,7 +817,7 @@ with cq2:
             title=f"Total Volume by Token Pair (top {len(d)}, all recorded days)",
         )
         fig.update_traces(textposition="outside", cliponaxis=False)
-        fig.update_layout(height=max(380, 28 * len(d) + 110), yaxis_title=None, xaxis_title="Volume (USD)")
+        fig.update_layout(height=430, yaxis_title=None, xaxis_title="Volume (USD)")
         pad_value_axis(fig, "x")
         st.plotly_chart(fig, use_container_width=True)
 
