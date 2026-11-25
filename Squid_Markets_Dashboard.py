@@ -596,7 +596,7 @@ with c1:
         d7 = ex7.rename_axis("exchange").reset_index(name="volume_7d")
         fig = px.bar(
             d7, x="exchange", y="volume_7d", color="exchange", color_discrete_map=ex_colors,
-            text=d7["volume_7d"].map(fmt_usd), title="Total Trading Volume (7d) by Exchange",
+            text=d7["volume_7d"].map(fmt_usd), title="Total Trading Volume by Exchange (7d)",
         )
         fig.update_traces(textposition="outside", cliponaxis=False)
         fig.update_layout(height=430, xaxis_title=None, yaxis_title="Volume (USD)", showlegend=False)
